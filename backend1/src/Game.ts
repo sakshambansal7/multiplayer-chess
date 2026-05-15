@@ -1,5 +1,3 @@
-
-
 import { WebSocket } from "ws";
 import { Chess } from "chess.js";
 import { MOVE, GAME_OVER, INIT_GAME } from "./messages";
@@ -7,62 +5,73 @@ import { MOVE, GAME_OVER, INIT_GAME } from "./messages";
 export class Game {
     public player1: WebSocket;
     public player2: WebSocket;
+    public player1Id: string;
+    public player2Id: string;
     private board: Chess;
     private startTime: Date;
     private moveCount: number;
 
-    constructor(player1: WebSocket, player2: WebSocket) {
+    constructor(player1: WebSocket, player2: WebSocket, player1Id: string, player2Id: string) {
         this.player1 = player1;
         this.player2 = player2;
+        this.player1Id = player1Id;
+        this.player2Id = player2Id;
         this.board = new Chess();
         this.startTime = new Date();
         this.moveCount = 0;
 
-        // Notify both players about their colors
         this.player1.send(
             JSON.stringify({
                 type: INIT_GAME,
-                payload: {
-                    color: "white",
-                },
+                payload: { color: "white" },
             })
         );
         this.player2.send(
             JSON.stringify({
                 type: INIT_GAME,
-                payload: {
-                    color: "black",
-                },
+                payload: { color: "black" },
             })
         );
     }
 
-    makeMove(socket: WebSocket,
-         move:
-          { from: string; 
-            to: string 
-        }) {
+    sendExistingState(socket: WebSocket, userId: string) {
+        const playerColor = userId === this.player1Id ? "white" : "black";
+        
+        socket.send(JSON.stringify({
+            type: INIT_GAME,
+            payload: {
+                color: playerColor,
+                board: this.board.board(), 
+                fen: this.board.fen(),
+                moveCount: this.moveCount // Send the true historical count metrics down
+            }
+        }));
+    }
 
-            console.log(move)
-        // Enforce turn rules
-        if (this.moveCount % 2 === 0 && socket !== this.player1) {
+    makeMove(socket: WebSocket, move: { from: string; to: string }) {
+        console.log("Processing move attempt:", move);
+
+        // Turn enforcement using absolute, immutable player variables
+        const isWhitesTurn = this.moveCount % 2 === 0;
+        
+        if (isWhitesTurn && socket !== this.player1) {
+            console.log("Move rejected: out of turn assignment rules (White to move).");
             return;
         }
-        if (this.moveCount % 2 === 1 && socket !== this.player2) {
+        if (!isWhitesTurn && socket !== this.player2) {
+            console.log("Move rejected: out of turn assignment rules (Black to move).");
             return;
         }
 
         try {
-            // Try to make the move on the board
             const result = this.board.move(move);
-
-            if (!result) throw new Error("Invalid move");
+            if (!result) throw new Error("Invalid move execution parameters.");
         } catch (e) {
-            console.error("Move error:", e instanceof Error ? e.message : "Unknown error");
+            console.error("Rules exception encountered:", e instanceof Error ? e.message : e);
             return;
         }
 
-        // Check for game over conditions
+        // Check for terminal conditions
         if (
             this.board.isCheckmate() ||
             this.board.isStalemate() ||
@@ -71,49 +80,28 @@ export class Game {
             this.board.isThreefoldRepetition()
         ) {
             const winner = this.board.isCheckmate()
-                ? this.board.turn() === "w"
-                    ? "black"
-                    : "white"
+                ? this.board.turn() === "w" ? "black" : "white"
                 : "draw";
 
-            // Notify both players about the game result
-            this.player1.send(
-                JSON.stringify({
-                    type: GAME_OVER,
-                    payload: {
-                        winner,
-                    },
-                })
-            );
-            this.player2.send(
-                JSON.stringify({
-                    type: GAME_OVER,
-                    payload: {
-                        winner,
-                    },
-                })
-            );
+            const gameOverPayload = JSON.stringify({
+                type: GAME_OVER,
+                payload: { winner },
+            });
+
+            try { this.player1.send(gameOverPayload); } catch (e) {}
+            try { this.player2.send(gameOverPayload); } catch (e) {}
             return;
         }
 
-        // Notify the opponent about the move
-        if (this.moveCount % 2 === 0) {
-            this.player2.send(
-                JSON.stringify({
-                    type: MOVE,
-                    payload: move,
-                })
-            );
-        } else {
-            this.player1.send(
-                JSON.stringify({
-                    type: MOVE,
-                    payload: move,
-                })
-            );
-        }
+        // Universal broadcast block to guarantee cross-window state propagation
+        const moveUpdatePayload = JSON.stringify({
+            type: MOVE,
+            payload: move,
+        });
+
+        try { this.player1.send(moveUpdatePayload); } catch (e) {}
+        try { this.player2.send(moveUpdatePayload); } catch (e) {}
 
         this.moveCount++;
     }
 }
-

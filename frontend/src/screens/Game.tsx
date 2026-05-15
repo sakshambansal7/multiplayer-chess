@@ -14,8 +14,9 @@ export const Game = () => {
     const [board, setBoard] = useState(chess.board());
     const [started, setStarted] = useState(false);
     const [isWaiting, setIsWaiting] = useState(false);
-    // State to track if you are 'white' or 'black'
     const [playerColor, setPlayerColor] = useState<string | null>(null);
+    // State to track live network status updates from the GameManager
+    const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
     useEffect(() => {
         if (!socket) return;
@@ -23,21 +24,45 @@ export const Game = () => {
         socket.onmessage = (event) => {
             const message = JSON.parse(event.data);
             switch (message.type) {
+                // Inside game.tsx -> switch (message.type) -> case INIT_GAME:
+
                 case INIT_GAME:
                     setStarted(true);
                     setIsWaiting(false);
-                    setBoard(chess.board());
-                    // The backend sends { payload: { color: "white" | "black" } }
+                    setStatusMessage(null);
                     setPlayerColor(message.payload.color); 
+
+                    if (message.payload.board && message.payload.fen) {
+                        // Hydrate the engine rules schema configuration parameters
+                        chess.load(message.payload.fen);
+                        setBoard(chess.board());
+                        console.log("Reconnection sequence complete. State sync finalized.");
+                    } else {
+                        chess.reset();
+                        setBoard(chess.board());
+                    }
                     break;
+                    
+                
+                case "PING":
+                    socket.send(JSON.stringify({ type: "PONG" }));
+                    break;
+
+                case "OPPONENT_STATUS":
+                    // Capture dynamic network states ("disconnected" vs "connected")
+                    setStatusMessage(message.payload.message);
+                    break;
+
                 case MOVE:
                     const move = message.payload;
                     chess.move(move);
                     setBoard(chess.board());
                     break;
+
                 case GAME_OVER:
                     setStarted(false);
                     setIsWaiting(false);
+                    setStatusMessage("Game Over!");
                     break;
             }
         };
@@ -55,7 +80,7 @@ export const Game = () => {
                             setBoard={setBoard} 
                             socket={socket} 
                             board={board} 
-                            playerColor={playerColor} // Passing color here
+                            playerColor={playerColor} 
                         />
                     </div>
                     <div className="mt-28 h-[32rem] col-span-2 flex flex-col justify-center items-center bg-gray-900 rounded-lg shadow-xl">
@@ -74,9 +99,24 @@ export const Game = () => {
                             )}
 
                             {started && (
-                                <div className="text-xl font-semibold text-green-400">
-                                    Match in Progress <br/>
-                                    <span className="text-sm text-gray-400">Playing as {playerColor}</span>
+                                <div className="space-y-4">
+                                    <div className="text-xl font-semibold text-green-400">
+                                        Match in Progress <br/>
+                                        <span className="text-sm text-gray-400">Playing as {playerColor}</span>
+                                    </div>
+                                    
+                                    {/* Real-time alert display for disconnections */}
+                                    {statusMessage && (
+                                        <div className="text-sm bg-red-900/50 border border-red-500 text-red-200 px-3 py-2 rounded animate-pulse">
+                                            {statusMessage}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            
+                            {!started && !isWaiting && statusMessage && (
+                                <div className="text-xl font-bold text-red-400 mt-4">
+                                    {statusMessage}
                                 </div>
                             )}
                         </div>
